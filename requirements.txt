@@ -1,1 +1,2 @@
 apify
+apify-client

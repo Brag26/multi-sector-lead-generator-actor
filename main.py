@@ -25,3 +25,7 @@ async def main():
 
         await Actor.push_data(results)
         Actor.log.info(f"Generated {len(results)} leads for sector: {sector}")
+
+# This is the critical missing line - it actually runs the main function
+if __name__ == '__main__':
+    Actor.main(main)

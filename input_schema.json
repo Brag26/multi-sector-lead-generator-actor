@@ -1,11 +1,14 @@
 {
   "title": "Multi-Sector Lead Generator Input",
+  "description": "Generate business leads for different sectors using a single Apify actor.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "sector": {
       "title": "Sector",
+      "description": "Select the industry sector for which leads should be generated.",
       "type": "string",
+      "editor": "select",
       "enum": [
         "Healthcare",
         "Real Estate",
@@ -16,15 +19,21 @@
     },
     "city": {
       "title": "City",
-      "type": "string"
+      "description": "Target city or location for lead generation.",
+      "type": "string",
+      "editor": "textfield"
     },
     "keyword": {
       "title": "Keyword",
-      "type": "string"
+      "description": "Optional keyword to refine the type of leads (e.g., Dermatologist, Builder).",
+      "type": "string",
+      "editor": "textfield"
     },
     "maxResults": {
-      "title": "Max Results",
+      "title": "Maximum Results",
+      "description": "Maximum number of leads to generate.",
       "type": "integer",
+      "editor": "number",
       "default": 10
     }
   },

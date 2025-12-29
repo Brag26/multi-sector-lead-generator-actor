@@ -23,6 +23,12 @@
       "type": "string",
       "editor": "textfield"
     },
+    "postcode": {
+      "title": "Postcode/ZIP Code",
+      "description": "Optional postcode or ZIP code for more precise location targeting (e.g., 600001, 110001).",
+      "type": "string",
+      "editor": "textfield"
+    },
     "keyword": {
       "title": "Keyword",
       "description": "Optional keyword to refine the type of leads (e.g., Dermatologist, Builder).",

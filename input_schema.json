@@ -18,8 +18,8 @@
       ]
     },
     "city": {
-      "title": "City",
-      "description": "Target city or location for lead generation.",
+      "title": "City (Optional)",
+      "description": "Target city or location for lead generation. Leave empty for broader search.",
       "type": "string",
       "editor": "textfield"
     },
@@ -30,8 +30,8 @@
       "editor": "textfield"
     },
     "keyword": {
-      "title": "Keyword",
-      "description": "Optional keyword to refine the type of leads (e.g., Dermatologist, Builder).",
+      "title": "Keyword (Optional)",
+      "description": "Refine search within the selected sector (e.g., 'Dermatologist' for Healthcare, 'Builder' for Real Estate). Leave empty to use default sector keywords.",
       "type": "string",
       "editor": "textfield"
     },
@@ -43,5 +43,5 @@
       "default": 10
     }
   },
-  "required": ["sector", "city"]
+  "required": ["sector"]
 }

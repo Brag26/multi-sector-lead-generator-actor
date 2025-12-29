@@ -5,17 +5,19 @@ import os
 import json
 import aiohttp
 
-async def generate_search_queries_with_llm(sector, keyword, city, postcode):
+async def generate_search_queries_with_llm(sector, keyword, city, postcode, country):
     """Use multiple LLMs to generate intelligent search queries with fallback"""
     
     # Build location context
-    location_context = ""
-    if city and postcode:
-        location_context = f"in {city} {postcode}"
-    elif city:
-        location_context = f"in {city}"
-    elif postcode:
-        location_context = f"in postcode {postcode}"
+    location_parts = []
+    if city:
+        location_parts.append(city)
+    if postcode:
+        location_parts.append(postcode)
+    if country:
+        location_parts.append(country)
+    
+    location_context = f"in {' '.join(location_parts)}" if location_parts else ""
     
     # Build the prompt
     prompt = f"""You are a business lead generation expert. Generate 3-5 highly specific search queries to find businesses in the {sector} sector {location_context}.
@@ -54,7 +56,16 @@ Generate the search queries now:"""
     
     # Final fallback to basic keyword
     Actor.log.warning("⚠️ All LLM providers failed, using fallback keywords")
-    return [keyword if keyword else sector]
+    
+    # Split the fallback keywords into individual searches instead of one long string
+    fallback = keyword if keyword else sector
+    if isinstance(fallback, str) and "," in fallback:
+        # If it's a comma-separated list, split it into individual terms
+        keywords_list = [k.strip() for k in fallback.split(",")]
+        # Return first 3-5 keywords to avoid too many searches
+        return keywords_list[:5]
+    else:
+        return [fallback]
 
 async def call_claude_api(prompt):
     """Call Anthropic Claude API"""
@@ -167,6 +178,7 @@ async def main():
         city = input_data.get("city", "").strip()
         postcode = input_data.get("postcode", "").strip()
         keyword = input_data.get("keyword", "").strip()
+        country = input_data.get("country", "").strip()
         max_results = input_data.get("maxResults", 10)
         
         # Define comprehensive keywords for each sector (final fallback)
@@ -201,22 +213,29 @@ async def main():
         if not keyword:
             keyword = sector_keywords.get(sector, sector)
         
-        # Build location string
-        if city and postcode:
-            location = f"{city} {postcode}"
-        elif city:
-            location = city
-        elif postcode:
-            location = postcode
-        else:
-            location = ""
+        # Build location string intelligently
+        location_parts = []
+        
+        if city:
+            location_parts.append(city)
+        if postcode:
+            location_parts.append(postcode)
+        
+        # Add country if provided, or auto-detect from Australian postcodes
+        if country:
+            location_parts.append(country)
+        elif postcode and postcode.isdigit() and len(postcode) == 4 and 2000 <= int(postcode) <= 9999:
+            location_parts.append("Australia")
+            country = "Australia"  # Set for later use
+        
+        location = " ".join(location_parts)
         
         Actor.log.info(f"📋 Sector: {sector}, Location: {location or 'Not specified'}")
         Actor.log.info(f"🔍 User keyword: {keyword}")
         Actor.log.info("🤖 Generating intelligent search queries using AI...")
         
         # Generate AI-powered search queries with multi-LLM fallback
-        search_queries = await generate_search_queries_with_llm(sector, keyword, city, postcode)
+        search_queries = await generate_search_queries_with_llm(sector, keyword, city, postcode, country)
         
         # Initialize Apify client
         token = os.environ.get('APIFY_TOKEN')
@@ -235,15 +254,31 @@ async def main():
             
             Actor.log.info(f"🔍 Searching: {search_string}")
             
-            # Run Google Maps Scraper
+            # Run Google Maps Scraper with improved location targeting
             run_input = {
                 "searchStringsArray": [search_string],
                 "maxCrawledPlacesPerSearch": results_per_query,
                 "language": "en",
                 "includeWebResults": False,
                 "maxReviews": 0,
-                "maxImages": 0
+                "maxImages": 0,
+                "maxAutomaticZoomOut": 0  # Prevent auto zoom-out to maintain location accuracy
             }
+            
+            # Add country-specific targeting
+            country_codes = {
+                "Australia": "au",
+                "USA": "us",
+                "United States": "us",
+                "India": "in",
+                "UK": "uk",
+                "United Kingdom": "uk",
+                "Canada": "ca"
+            }
+            
+            if country and country in country_codes:
+                run_input["countryCode"] = country_codes[country]
+                Actor.log.info(f"   🌏 Targeting {country} specifically")
             
             try:
                 run = client.actor("compass/crawler-google-places").call(run_input=run_input)
@@ -256,6 +291,7 @@ async def main():
                         "searchQuery": query,
                         "city": city if city else "N/A",
                         "postcode": postcode if postcode else "N/A",
+                        "country": country if country else "N/A",
                         "phone": item.get("phone", "N/A"),
                         "email": item.get("email", "N/A"),
                         "website": item.get("website", "N/A"),

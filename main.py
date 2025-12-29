@@ -6,29 +6,19 @@ import json
 import aiohttp
 import time
 
+
 # =====================================================
-# SAFE AI QUERY GENERATION (NO CRASH, HAS FALLBACK)
+# SAFE AI QUERY GENERATION (NEVER CRASHES)
 # =====================================================
 async def generate_search_queries_with_llm(sector, keyword, city, postcode, country):
-    location_parts = []
-    if city:
-        location_parts.append(city)
-    if postcode:
-        location_parts.append(postcode)
-    if country:
-        location_parts.append(country)
-
-    location_context = f"in {' '.join(location_parts)}" if location_parts else ""
+    location = " ".join(filter(None, [city, postcode, country]))
 
     prompt = f"""
-You are a business lead generation expert.
-
-Generate 3–5 Google Maps search queries for the {sector} sector {location_context}.
-Keyword: {keyword or "use best judgement"}
+Generate 3–5 Google Maps search queries for {sector} in {location}.
 
 RULES:
 - Return ONLY a JSON array
-- No explanations
+- No explanation
 - Example: ["clinics", "medical centre", "doctors"]
 """
 
@@ -43,8 +33,8 @@ RULES:
                     "messages": [{"role": "user", "content": prompt}],
                 },
                 timeout=aiohttp.ClientTimeout(total=30),
-            ) as response:
-                data = await response.json()
+            ) as res:
+                data = await res.json()
 
         text = ""
         for block in data.get("content", []):
@@ -52,19 +42,15 @@ RULES:
                 text += block.get("text", "")
 
         text = text.replace("```json", "").replace("```", "").strip()
-
-        # Guards
-        if not text:
-            raise ValueError("Empty LLM response")
-
         parsed = json.loads(text)
+
         if not isinstance(parsed, list) or not parsed:
-            raise ValueError("Invalid JSON structure")
+            raise ValueError("Invalid JSON")
 
         return parsed
 
     except Exception as e:
-        Actor.log.warning(f"⚠️ LLM failed, using fallback keyword: {e}")
+        Actor.log.warning(f"⚠️ LLM failed, fallback used: {e}")
         return [keyword] if keyword else [sector]
 
 
@@ -89,48 +75,76 @@ async def main():
         Actor.log.info(f"🔢 Max results: {max_results}")
 
         # -------------------------------------------------
-        # Generate AI queries (HARD LIMITED TO 1)
+        # Generate queries (HARD LIMIT TO ONE)
         # -------------------------------------------------
-        search_queries = await generate_search_queries_with_llm(
+        queries = await generate_search_queries_with_llm(
             sector, keyword, city, postcode, country
         )
-        search_queries = search_queries[:1]  # 🔒 CRITICAL FIX
+        query = queries[0]  # 🔒 ONE QUERY ONLY
+
+        search_string = f"{query} in {city} {postcode}".strip()
+        Actor.log.info(f"🔍 Searching: {search_string}")
 
         client = ApifyClient(token=os.environ["APIFY_TOKEN"])
-        collected_results = []
 
-        for query in search_queries:
-            search_string = f"{query} in {city} {postcode}".strip()
-            Actor.log.info(f"🔍 Searching: {search_string}")
+        run_input = {
+            "searchStringsArray": [search_string],
+            "language": "en",
+            "includeWebResults": False,
+            "maxReviews": 0,
+            "maxImages": 0,
+            "countryCode": "au",
 
-            run_input = {
-                "searchStringsArray": [search_string],
+            # These LIMIT OUTPUT, not crawling (abort handles crawling)
+            "maxCrawledPlacesPerSearch": max_results,
+        }
 
-                # 🔒 HARD STOP LIMITS
-                "maxCrawledPlacesPerSearch": max_results,
-                "maxSearchResults": max_results,
-                "maxTotalPlaces": max_results,
+        # -------------------------------------------------
+        # START CRAWLER (NON-BLOCKING)
+        # -------------------------------------------------
+        run = client.actor("compass/crawler-google-places").start(
+            run_input=run_input
+        )
 
-                # 🛑 STOP MAP / COUNTRY EXPANSION
-                "searchArea": "city",
-                "maxCities": 1,
-                "maxMapSegments": 1,
-                "maxAutomaticZoomOut": 0,
+        run_id = run["id"]
+        dataset_id = run["defaultDatasetId"]
 
-                # BASIC
-                "language": "en",
-                "includeWebResults": False,
-                "maxReviews": 0,
-                "maxImages": 0,
-                "countryCode": "au",
-            }
+        Actor.log.info(f"🚀 Crawler started (runId={run_id})")
 
-            run = client.actor("compass/crawler-google-places").call(
-                run_input=run_input
-            )
+        collected = 0
 
-            for item in client.dataset(run["defaultDatasetId"]).iterate_items():
-                collected_results.append({
+        # -------------------------------------------------
+        # POLL + ABORT LOGIC (THIS STOPS 9000+ PAGES)
+        # -------------------------------------------------
+        while True:
+            items = list(client.dataset(dataset_id).iterate_items())
+            collected = len(items)
+
+            Actor.log.info(f"📊 Collected {collected} places so far")
+
+            if collected >= max_results:
+                Actor.log.warning("🛑 Max results reached — aborting crawler")
+                client.run(run_id).abort()
+                break
+
+            if time.time() - START_TIME > 90:
+                Actor.log.warning("⏱ Time limit reached — aborting crawler")
+                client.run(run_id).abort()
+                break
+
+            await asyncio.sleep(3)
+
+        # -------------------------------------------------
+        # DEDUPLICATE + PUSH RESULTS
+        # -------------------------------------------------
+        seen = set()
+        final_results = []
+
+        for item in items:
+            key = f"{item.get('title')}_{item.get('address')}"
+            if key not in seen:
+                seen.add(key)
+                final_results.append({
                     "name": item.get("title"),
                     "phone": item.get("phone"),
                     "website": item.get("website"),
@@ -142,31 +156,12 @@ async def main():
                     "searchQuery": query,
                 })
 
-                Actor.log.info(f"✅ Found: {item.get('title')}")
-
-            # ⏱ SAFETY TIMEOUT (2 minutes)
-            if time.time() - START_TIME > 120:
-                Actor.log.warning("⏱ Time limit reached, stopping early")
-                break
-
-        # -------------------------------------------------
-        # DEDUPLICATE + LIMIT RESULTS
-        # -------------------------------------------------
-        seen = set()
-        unique_results = []
-
-        for lead in collected_results:
-            key = f"{lead['name']}_{lead['address']}"
-            if key not in seen:
-                seen.add(key)
-                unique_results.append(lead)
-
-        final_results = unique_results[:max_results]
+        final_results = final_results[:max_results]
 
         await Actor.push_data(final_results)
 
         Actor.log.info(f"🎉 Finished. {len(final_results)} leads saved.")
-        Actor.log.info("🛑 Explicit actor exit")
+        Actor.log.info("🛑 Actor exiting cleanly")
         await Actor.exit()
 
 

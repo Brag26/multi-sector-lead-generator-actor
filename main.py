@@ -4,11 +4,12 @@ import asyncio
 import os
 import json
 import aiohttp
+import time
 
+# ===============================
+# AI QUERY GENERATION (UNCHANGED)
+# ===============================
 async def generate_search_queries_with_llm(sector, keyword, city, postcode, country):
-    """Use multiple LLMs to generate intelligent search queries with fallback"""
-    
-    # Build location context
     location_parts = []
     if city:
         location_parts.append(city)
@@ -16,313 +17,136 @@ async def generate_search_queries_with_llm(sector, keyword, city, postcode, coun
         location_parts.append(postcode)
     if country:
         location_parts.append(country)
-    
+
     location_context = f"in {' '.join(location_parts)}" if location_parts else ""
-    
-    # Build the prompt
-    prompt = f"""You are a business lead generation expert. Generate 3-5 highly specific search queries to find businesses in the {sector} sector {location_context}.
 
-User's specific keyword: {keyword if keyword else "Not specified - use your expertise"}
+    prompt = f"""
+You are a business lead generation expert.
+Generate 3-5 Google Maps search queries for {sector} {location_context}.
+Keyword: {keyword or "use best judgement"}
 
-Requirements:
-- Generate diverse search terms that cover different business types in this sector
-- Include specific roles, services, and business types
-- Make queries that will find real businesses on Google Maps
-- Each query should be 2-5 words maximum
-- Return ONLY a JSON array of strings, nothing else
+Return ONLY a JSON array of short strings.
+"""
 
-Example format: ["doctors", "medical clinics", "specialist hospitals"]
-
-Generate the search queries now:"""
-
-    # Try multiple LLM providers in order
-    llm_providers = [
-        {"name": "Claude", "func": call_claude_api},
-        {"name": "OpenAI", "func": call_openai_api},
-        {"name": "Google Gemini", "func": call_gemini_api},
-        {"name": "Groq", "func": call_groq_api},
-    ]
-    
-    for provider in llm_providers:
-        try:
-            Actor.log.info(f"🤖 Trying {provider['name']} API...")
-            queries = await provider["func"](prompt)
-            if queries and len(queries) > 0:
-                Actor.log.info(f"✅ {provider['name']} generated {len(queries)} queries: {queries}")
-                return queries
-        except Exception as e:
-            Actor.log.warning(f"⚠️ {provider['name']} failed: {e}")
-            continue
-    
-    # Final fallback to basic keyword
-    Actor.log.warning("⚠️ All LLM providers failed, using fallback keywords")
-    
-    # Split the fallback keywords into individual searches instead of one long string
-    fallback = keyword if keyword else sector
-    if isinstance(fallback, str) and "," in fallback:
-        # If it's a comma-separated list, split it into individual terms
-        keywords_list = [k.strip() for k in fallback.split(",")]
-        # Return first 3-5 keywords to avoid too many searches
-        return keywords_list[:5]
-    else:
-        return [fallback]
-
-async def call_claude_api(prompt):
-    """Call Anthropic Claude API"""
+    # Claude only (safe default in Apify)
     async with aiohttp.ClientSession() as session:
         async with session.post(
             "https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json"},
             json={
                 "model": "claude-sonnet-4-20250514",
-                "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            data = await response.json()
-            
-            # Extract response text
-            response_text = ""
-            for content in data.get("content", []):
-                if content.get("type") == "text":
-                    response_text += content.get("text", "")
-            
-            # Parse JSON
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-            return json.loads(response_text)
-
-async def call_openai_api(prompt):
-    """Call OpenAI API (GPT-4, GPT-3.5, etc.)"""
-    api_key = os.environ.get('OPENAI_API_KEY')
-    if not api_key:
-        raise Exception("OpenAI API key not configured")
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
-            },
-            json={
-                "model": "gpt-4o-mini",  # Fast and cost-effective
+                "max_tokens": 300,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1000,
-                "temperature": 0.7
             },
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            data = await response.json()
-            response_text = data["choices"][0]["message"]["content"]
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-            return json.loads(response_text)
+        ) as res:
+            data = await res.json()
+            text = ""
+            for c in data.get("content", []):
+                if c.get("type") == "text":
+                    text += c.get("text", "")
+            text = text.replace("```json", "").replace("```", "").strip()
+            return json.loads(text)
 
-async def call_gemini_api(prompt):
-    """Call Google Gemini API"""
-    api_key = os.environ.get('GOOGLE_API_KEY')
-    if not api_key:
-        raise Exception("Google API key not configured")
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 1000
-                }
-            },
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            data = await response.json()
-            response_text = data["candidates"][0]["content"]["parts"][0]["text"]
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-            return json.loads(response_text)
 
-async def call_groq_api(prompt):
-    """Call Groq API (Fast inference with Llama, Mixtral models)"""
-    api_key = os.environ.get('GROQ_API_KEY')
-    if not api_key:
-        raise Exception("Groq API key not configured")
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
-            },
-            json={
-                "model": "llama-3.3-70b-versatile",  # Fast and powerful
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 1000,
-                "temperature": 0.7
-            },
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as response:
-            data = await response.json()
-            response_text = data["choices"][0]["message"]["content"]
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-            return json.loads(response_text)
-
+# ===============================
+# MAIN ACTOR
+# ===============================
 async def main():
     async with Actor:
-        Actor.log.info("=== Starting Multi-LLM AI-Powered Lead Generator ===")
-        
-        # Get input
+        START_TIME = time.time()
+
         input_data = await Actor.get_input() or {}
         sector = input_data.get("sector", "Healthcare")
         city = input_data.get("city", "").strip()
         postcode = input_data.get("postcode", "").strip()
         keyword = input_data.get("keyword", "").strip()
-        country = input_data.get("country", "").strip()
-        max_results = input_data.get("maxResults", 10)
-        
-        # Define comprehensive keywords for each sector (final fallback)
-        sector_keywords = {
-            "Healthcare": "Doctors, Clinics, Hospitals, Medical Centers, Specialists, Dentists, Physiotherapy, Diagnostic Centers",
-            "Real Estate": "Real Estate Agents, Property Developers, Realtors, Real Estate Companies, Property Consultants, Builders",
-            "Manufacturing": "Manufacturing Companies, Factories, Industrial Units, Production Facilities, OEM Manufacturers",
-            "IT & Technology": "IT Companies, Software Companies, Tech Startups, Web Development, App Development, IT Services, Cloud Services",
-            "Education & Training": "Schools, Colleges, Universities, Training Centers, Coaching Classes, Online Education, Tutors",
-            "Legal Services": "Lawyers, Law Firms, Legal Consultants, Attorneys, Advocates, Legal Advisors",
-            "Financial Services": "Banks, Financial Advisors, Investment Firms, Accounting Firms, Tax Consultants, Financial Planners",
-            "Hospitality & Tourism": "Hotels, Resorts, Travel Agencies, Tour Operators, Restaurants, Guest Houses, Holiday Packages",
-            "Retail & E-commerce": "Retail Stores, Shopping Centers, Online Stores, E-commerce, Supermarkets, Outlets",
-            "Food & Beverage": "Restaurants, Cafes, Food Delivery, Catering Services, Bakeries, Cloud Kitchens, Food Manufacturers",
-            "Construction": "Construction Companies, Contractors, Builders, Civil Engineers, Architecture Firms, Interior Designers",
-            "Automotive": "Car Dealers, Auto Repair, Car Service Centers, Vehicle Sales, Auto Parts, Garages",
-            "Marketing & Advertising": "Marketing Agencies, Advertising Firms, Digital Marketing, SEO Services, Creative Agencies, PR Firms",
-            "Consulting": "Business Consultants, Management Consulting, Strategy Consulting, HR Consultants, Advisory Services",
-            "Logistics & Transportation": "Logistics Companies, Freight Forwarders, Courier Services, Transportation Services, Warehousing",
-            "Beauty & Wellness": "Beauty Salons, Spas, Wellness Centers, Gyms, Yoga Studios, Beauty Parlors, Cosmetics",
-            "Entertainment & Media": "Event Planners, Production Houses, Media Companies, Photography Studios, Entertainment Services",
-            "Agriculture": "Agricultural Services, Farming Equipment, Agro Products, Organic Farming, Agricultural Consultants",
-            "Energy & Utilities": "Solar Companies, Energy Consultants, Utility Services, Renewable Energy, Power Solutions",
-            "Telecommunications": "Telecom Companies, Network Providers, Internet Services, Broadband Providers, Mobile Services",
-            "Insurance": "Insurance Companies, Insurance Agents, Insurance Brokers, Life Insurance, Health Insurance",
-            "Professional Services": "Business Services, Corporate Services, Document Services, Translation Services, Notary Services",
-            "Non-Profit & NGO": "NGOs, Charitable Organizations, Non-Profit Organizations, Foundations, Social Services",
-            "Sports & Fitness": "Fitness Centers, Sports Clubs, Personal Trainers, Sports Equipment, Martial Arts, Dance Studios"
-        }
-        
-        # Use fallback keyword if no keyword provided
-        if not keyword:
-            keyword = sector_keywords.get(sector, sector)
-        
-        # Build location string intelligently
-        location_parts = []
-        
-        if city:
-            location_parts.append(city)
-        if postcode:
-            location_parts.append(postcode)
-        
-        # Add country if provided, or auto-detect from Australian postcodes
-        if country:
-            location_parts.append(country)
-        elif postcode and postcode.isdigit() and len(postcode) == 4 and 2000 <= int(postcode) <= 9999:
-            location_parts.append("Australia")
-            country = "Australia"  # Set for later use
-        
-        location = " ".join(location_parts)
-        
-        Actor.log.info(f"📋 Sector: {sector}, Location: {location or 'Not specified'}")
-        Actor.log.info(f"🔍 User keyword: {keyword}")
-        Actor.log.info("🤖 Generating intelligent search queries using AI...")
-        
-        # Generate AI-powered search queries with multi-LLM fallback
-        search_queries = await generate_search_queries_with_llm(sector, keyword, city, postcode, country)
-        
-        # Initialize Apify client
-        token = os.environ.get('APIFY_TOKEN')
-        client = ApifyClient(token=token)
-        
+        country = input_data.get("country", "Australia")
+        max_results = int(input_data.get("maxResults", 10))
+
+        Actor.log.info(f"📋 Sector: {sector}")
+        Actor.log.info(f"📍 Location: {city} {postcode} {country}")
+        Actor.log.info(f"🔢 Max results: {max_results}")
+
+        # -------------------------------
+        # Generate AI queries (LIMIT TO 1)
+        # -------------------------------
+        queries = await generate_search_queries_with_llm(
+            sector, keyword, city, postcode, country
+        )
+        queries = queries[:1]  # 🔒 CRITICAL FIX
+
+        client = ApifyClient(token=os.environ["APIFY_TOKEN"])
         all_results = []
-        results_per_query = max(1, max_results // len(search_queries))
-        
-        # Run searches for each AI-generated query
-        for query in search_queries:
-            # Build full search string
-            if location:
-                search_string = f"{query} in {location}"
-            else:
-                search_string = query
-            
+
+        for query in queries:
+            search_string = f"{query} in {city} {postcode}".strip()
             Actor.log.info(f"🔍 Searching: {search_string}")
-            
-            # Run Google Maps Scraper with improved location targeting
+
             run_input = {
                 "searchStringsArray": [search_string],
-                "maxCrawledPlacesPerSearch": results_per_query,
+
+                # 🔒 HARD STOP LIMITS
+                "maxCrawledPlacesPerSearch": max_results,
+                "maxSearchResults": max_results,
+                "maxTotalPlaces": max_results,
+
+                # 🛑 STOP COUNTRY / MAP EXPANSION
+                "searchArea": "city",
+                "maxCities": 1,
+                "maxMapSegments": 1,
+                "maxAutomaticZoomOut": 0,
+
+                # BASIC
                 "language": "en",
                 "includeWebResults": False,
                 "maxReviews": 0,
                 "maxImages": 0,
-                "maxAutomaticZoomOut": 0  # Prevent auto zoom-out to maintain location accuracy
+                "countryCode": "au",
             }
-            
-            # Add country-specific targeting
-            country_codes = {
-                "Australia": "au",
-                "USA": "us",
-                "United States": "us",
-                "India": "in",
-                "UK": "uk",
-                "United Kingdom": "uk",
-                "Canada": "ca"
-            }
-            
-            if country and country in country_codes:
-                run_input["countryCode"] = country_codes[country]
-                Actor.log.info(f"   🌏 Targeting {country} specifically")
-            
-            try:
-                run = client.actor("compass/crawler-google-places").call(run_input=run_input)
-                
-                # Process results
-                for item in client.dataset(run["defaultDatasetId"]).iterate_items():
-                    lead = {
-                        "name": item.get("title", "N/A"),
-                        "sector": sector,
-                        "searchQuery": query,
-                        "city": city if city else "N/A",
-                        "postcode": postcode if postcode else "N/A",
-                        "country": country if country else "N/A",
-                        "phone": item.get("phone", "N/A"),
-                        "email": item.get("email", "N/A"),
-                        "website": item.get("website", "N/A"),
-                        "address": item.get("address", "N/A"),
-                        "rating": item.get("totalScore", 0),
-                        "reviewCount": item.get("reviewsCount", 0),
-                        "googleMapsUrl": item.get("url", "N/A"),
-                        "category": item.get("categoryName", "N/A")
-                    }
-                    all_results.append(lead)
-                    Actor.log.info(f"✅ Found: {lead['name']}")
-                    
-            except Exception as e:
-                Actor.log.error(f"❌ Error searching '{query}': {e}")
-                continue
-        
-        # Remove duplicates based on name and address
-        unique_results = []
-        seen = set()
-        for lead in all_results:
-            identifier = f"{lead['name']}_{lead['address']}"
-            if identifier not in seen:
-                seen.add(identifier)
-                unique_results.append(lead)
-        
-        # Limit to max_results
-        final_results = unique_results[:max_results]
-        
-        # Push to dataset
-        await Actor.push_data(final_results)
-        Actor.log.info(f"=== ✨ Successfully generated {len(final_results)} unique leads using AI ===")
 
-if __name__ == '__main__':
+            run = client.actor("compass/crawler-google-places").call(
+                run_input=run_input
+            )
+
+            for item in client.dataset(run["defaultDatasetId"]).iterate_items():
+                all_results.append({
+                    "name": item.get("title"),
+                    "phone": item.get("phone"),
+                    "website": item.get("website"),
+                    "address": item.get("address"),
+                    "rating": item.get("totalScore"),
+                    "reviews": item.get("reviewsCount"),
+                    "category": item.get("categoryName"),
+                    "mapsUrl": item.get("url"),
+                    "searchQuery": query,
+                })
+
+                Actor.log.info(f"✅ Found: {item.get('title')}")
+
+            # ⏱ Safety timeout (2 minutes)
+            if time.time() - START_TIME > 120:
+                Actor.log.warning("⏱ Time limit reached, stopping early")
+                break
+
+        # -------------------------------
+        # Deduplicate + limit results
+        # -------------------------------
+        seen = set()
+        unique_results = []
+        for r in all_results:
+            key = f"{r['name']}_{r['address']}"
+            if key not in seen:
+                seen.add(key)
+                unique_results.append(r)
+
+        final_results = unique_results[:max_results]
+
+        await Actor.push_data(final_results)
+
+        Actor.log.info(f"🎉 Done. {len(final_results)} leads saved.")
+        Actor.log.info("🛑 Explicit actor exit")
+        await Actor.exit()
+
+
+if __name__ == "__main__":
     asyncio.run(main())

@@ -6,9 +6,9 @@ import json
 import aiohttp
 import time
 
-# ===============================
-# AI QUERY GENERATION (UNCHANGED)
-# ===============================
+# =====================================================
+# SAFE AI QUERY GENERATION (NO CRASH, HAS FALLBACK)
+# =====================================================
 async def generate_search_queries_with_llm(sector, keyword, city, postcode, country):
     location_parts = []
     if city:
@@ -22,40 +22,61 @@ async def generate_search_queries_with_llm(sector, keyword, city, postcode, coun
 
     prompt = f"""
 You are a business lead generation expert.
-Generate 3-5 Google Maps search queries for {sector} {location_context}.
+
+Generate 3–5 Google Maps search queries for the {sector} sector {location_context}.
 Keyword: {keyword or "use best judgement"}
 
-Return ONLY a JSON array of short strings.
+RULES:
+- Return ONLY a JSON array
+- No explanations
+- Example: ["clinics", "medical centre", "doctors"]
 """
 
-    # Claude only (safe default in Apify)
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 300,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        ) as res:
-            data = await res.json()
-            text = ""
-            for c in data.get("content", []):
-                if c.get("type") == "text":
-                    text += c.get("text", "")
-            text = text.replace("```json", "").replace("```", "").strip()
-            return json.loads(text)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                data = await response.json()
+
+        text = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+
+        text = text.replace("```json", "").replace("```", "").strip()
+
+        # Guards
+        if not text:
+            raise ValueError("Empty LLM response")
+
+        parsed = json.loads(text)
+        if not isinstance(parsed, list) or not parsed:
+            raise ValueError("Invalid JSON structure")
+
+        return parsed
+
+    except Exception as e:
+        Actor.log.warning(f"⚠️ LLM failed, using fallback keyword: {e}")
+        return [keyword] if keyword else [sector]
 
 
-# ===============================
+# =====================================================
 # MAIN ACTOR
-# ===============================
+# =====================================================
 async def main():
     async with Actor:
         START_TIME = time.time()
 
         input_data = await Actor.get_input() or {}
+
         sector = input_data.get("sector", "Healthcare")
         city = input_data.get("city", "").strip()
         postcode = input_data.get("postcode", "").strip()
@@ -67,18 +88,18 @@ async def main():
         Actor.log.info(f"📍 Location: {city} {postcode} {country}")
         Actor.log.info(f"🔢 Max results: {max_results}")
 
-        # -------------------------------
-        # Generate AI queries (LIMIT TO 1)
-        # -------------------------------
-        queries = await generate_search_queries_with_llm(
+        # -------------------------------------------------
+        # Generate AI queries (HARD LIMITED TO 1)
+        # -------------------------------------------------
+        search_queries = await generate_search_queries_with_llm(
             sector, keyword, city, postcode, country
         )
-        queries = queries[:1]  # 🔒 CRITICAL FIX
+        search_queries = search_queries[:1]  # 🔒 CRITICAL FIX
 
         client = ApifyClient(token=os.environ["APIFY_TOKEN"])
-        all_results = []
+        collected_results = []
 
-        for query in queries:
+        for query in search_queries:
             search_string = f"{query} in {city} {postcode}".strip()
             Actor.log.info(f"🔍 Searching: {search_string}")
 
@@ -90,7 +111,7 @@ async def main():
                 "maxSearchResults": max_results,
                 "maxTotalPlaces": max_results,
 
-                # 🛑 STOP COUNTRY / MAP EXPANSION
+                # 🛑 STOP MAP / COUNTRY EXPANSION
                 "searchArea": "city",
                 "maxCities": 1,
                 "maxMapSegments": 1,
@@ -109,41 +130,42 @@ async def main():
             )
 
             for item in client.dataset(run["defaultDatasetId"]).iterate_items():
-                all_results.append({
+                collected_results.append({
                     "name": item.get("title"),
                     "phone": item.get("phone"),
                     "website": item.get("website"),
                     "address": item.get("address"),
                     "rating": item.get("totalScore"),
-                    "reviews": item.get("reviewsCount"),
+                    "reviewCount": item.get("reviewsCount"),
                     "category": item.get("categoryName"),
-                    "mapsUrl": item.get("url"),
+                    "googleMapsUrl": item.get("url"),
                     "searchQuery": query,
                 })
 
                 Actor.log.info(f"✅ Found: {item.get('title')}")
 
-            # ⏱ Safety timeout (2 minutes)
+            # ⏱ SAFETY TIMEOUT (2 minutes)
             if time.time() - START_TIME > 120:
                 Actor.log.warning("⏱ Time limit reached, stopping early")
                 break
 
-        # -------------------------------
-        # Deduplicate + limit results
-        # -------------------------------
+        # -------------------------------------------------
+        # DEDUPLICATE + LIMIT RESULTS
+        # -------------------------------------------------
         seen = set()
         unique_results = []
-        for r in all_results:
-            key = f"{r['name']}_{r['address']}"
+
+        for lead in collected_results:
+            key = f"{lead['name']}_{lead['address']}"
             if key not in seen:
                 seen.add(key)
-                unique_results.append(r)
+                unique_results.append(lead)
 
         final_results = unique_results[:max_results]
 
         await Actor.push_data(final_results)
 
-        Actor.log.info(f"🎉 Done. {len(final_results)} leads saved.")
+        Actor.log.info(f"🎉 Finished. {len(final_results)} leads saved.")
         Actor.log.info("🛑 Explicit actor exit")
         await Actor.exit()
 

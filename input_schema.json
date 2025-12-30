@@ -36,24 +36,83 @@
         "Sports & Fitness"
       ]
     },
+
+    /* 🔹 NEW: Country Dropdown (Optional) */
+    "country": {
+      "title": "Country (Optional)",
+      "description": "Select a country for lead targeting.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "India",
+        "Australia",
+        "United States",
+        "United Kingdom",
+        "Canada",
+        "Singapore",
+        "UAE"
+      ]
+    },
+
+    /* 🔹 NEW: State Dropdown (Optional) */
+    "state": {
+      "title": "State / Province (Optional)",
+      "description": "Select a state or province.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "Tamil Nadu",
+        "Karnataka",
+        "Maharashtra",
+        "Kerala",
+        "New South Wales",
+        "Victoria",
+        "California",
+        "Texas",
+        "Ontario"
+      ]
+    },
+
+    /* 🔹 EXISTING FIELD (UNCHANGED) */
     "city": {
       "title": "City (Optional)",
       "description": "Target city or location for lead generation. Leave empty for broader search.",
       "type": "string",
       "editor": "textfield"
     },
+
+    /* 🔹 NEW: City Dropdown (Optional, Additional) */
+    "cityDropdown": {
+      "title": "City (Dropdown – Optional)",
+      "description": "Select a city from predefined list.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "Chennai",
+        "Bengaluru",
+        "Mumbai",
+        "Hyderabad",
+        "Sydney",
+        "Melbourne",
+        "Los Angeles",
+        "Toronto"
+      ]
+    },
+
     "postcode": {
       "title": "Postcode/ZIP Code",
       "description": "Optional postcode or ZIP code for more precise location targeting (e.g., 600001, 110001).",
       "type": "string",
       "editor": "textfield"
     },
+
     "keyword": {
       "title": "Keyword (Optional)",
       "description": "Refine search within the selected sector (e.g., 'Dermatologist' for Healthcare, 'Builder' for Real Estate). Leave empty to use default sector keywords.",
       "type": "string",
       "editor": "textfield"
     },
+
     "maxResults": {
       "title": "Maximum Results",
       "description": "Maximum number of leads to generate.",

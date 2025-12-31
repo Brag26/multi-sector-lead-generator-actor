@@ -65,13 +65,14 @@ async def main():
 
         sector = input_data.get("sector", "Healthcare")
         city = input_data.get("city", "").strip()
+        state = input_data.get("state", "").strip()
         postcode = input_data.get("postcode", "").strip()
         keyword = input_data.get("keyword", "").strip()
-        country = input_data.get("country", "Australia")
+        country = input_data.get("country", "").strip()
         max_results = int(input_data.get("maxResults", 10))
 
         Actor.log.info(f"📋 Sector: {sector}")
-        Actor.log.info(f"📍 Location: {city} {postcode} {country}")
+        Actor.log.info(f"📍 Location: {city} {state} {postcode} {country}")
         Actor.log.info(f"🔢 Max results: {max_results}")
 
         # -------------------------------------------------
@@ -80,9 +81,11 @@ async def main():
         queries = await generate_search_queries_with_llm(
             sector, keyword, city, postcode, country
         )
-        query = queries[0]  # 🔒 ONE QUERY ONLY
+        query = queries[0]
 
-        search_string = f"{query} in {city} {postcode}".strip()
+        location = " ".join(filter(None, [city, state, postcode, country]))
+        search_string = f"{query} in {location}".strip()
+
         Actor.log.info(f"🔍 Searching: {search_string}")
 
         client = ApifyClient(token=os.environ["APIFY_TOKEN"])
@@ -93,14 +96,29 @@ async def main():
             "includeWebResults": False,
             "maxReviews": 0,
             "maxImages": 0,
-            "countryCode": "au",
-
-            # These LIMIT OUTPUT, not crawling (abort handles crawling)
-            "maxCrawledPlacesPerSearch": max_results,
+            "maxCrawledPlacesPerSearch": max_results
         }
 
         # -------------------------------------------------
-        # START CRAWLER (NON-BLOCKING)
+        # OPTIONAL: countryCode ONLY if user provided country
+        # -------------------------------------------------
+        country_map = {
+            "india": "in",
+            "australia": "au",
+            "united states": "us",
+            "usa": "us",
+            "united kingdom": "gb",
+            "uk": "gb",
+            "canada": "ca"
+        }
+
+        if country:
+            code = country_map.get(country.lower())
+            if code:
+                run_input["countryCode"] = code
+
+        # -------------------------------------------------
+        # START CRAWLER
         # -------------------------------------------------
         run = client.actor("compass/crawler-google-places").start(
             run_input=run_input
@@ -113,9 +131,6 @@ async def main():
 
         collected = 0
 
-        # -------------------------------------------------
-        # POLL + ABORT LOGIC (THIS STOPS 9000+ PAGES)
-        # -------------------------------------------------
         while True:
             items = list(client.dataset(dataset_id).iterate_items())
             collected = len(items)
@@ -123,12 +138,10 @@ async def main():
             Actor.log.info(f"📊 Collected {collected} places so far")
 
             if collected >= max_results:
-                Actor.log.warning("🛑 Max results reached — aborting crawler")
                 client.run(run_id).abort()
                 break
 
             if time.time() - START_TIME > 90:
-                Actor.log.warning("⏱ Time limit reached — aborting crawler")
                 client.run(run_id).abort()
                 break
 
@@ -153,16 +166,11 @@ async def main():
                     "reviewCount": item.get("reviewsCount"),
                     "category": item.get("categoryName"),
                     "googleMapsUrl": item.get("url"),
-                    "searchQuery": query,
+                    "searchQuery": query
                 })
 
-        final_results = final_results[:max_results]
-
-        await Actor.push_data(final_results)
-
+        await Actor.push_data(final_results[:max_results])
         Actor.log.info(f"🎉 Finished. {len(final_results)} leads saved.")
-        Actor.log.info("🛑 Actor exiting cleanly")
-        await Actor.exit()
 
 
 if __name__ == "__main__":

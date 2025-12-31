@@ -73,10 +73,25 @@ async def main():
 
         Actor.log.info(f"📋 Sector: {sector}")
         Actor.log.info(f"📍 Location: {city} {state} {postcode} {country}")
-        Actor.log.info(f"🔢 Max results: {max_results}")
+        Actor.log.info(f"🔢 Max results requested: {max_results}")
 
         # -------------------------------------------------
-        # Generate queries (HARD LIMIT TO ONE)
+        # 🛑 CREDIT SAFETY GUARD (CRITICAL)
+        # -------------------------------------------------
+        remaining = Actor.get_env().get("APIFY_USER_REMAINING_CREDITS")
+        if remaining:
+            try:
+                if float(remaining) < 0.2:
+                    Actor.log.error("❌ Not enough Apify credits to start crawler")
+                    await Actor.push_data({
+                        "error": "Insufficient Apify credits. Please upgrade your plan."
+                    })
+                    return
+            except ValueError:
+                pass  # Ignore parsing issues safely
+
+        # -------------------------------------------------
+        # Generate ONE safe query
         # -------------------------------------------------
         queries = await generate_search_queries_with_llm(
             sector, keyword, city, postcode, country
@@ -90,17 +105,23 @@ async def main():
 
         client = ApifyClient(token=os.environ["APIFY_TOKEN"])
 
+        # -------------------------------------------------
+        # SAFE, LOW-COST CRAWLER CONFIG
+        # -------------------------------------------------
         run_input = {
             "searchStringsArray": [search_string],
             "language": "en",
             "includeWebResults": False,
             "maxReviews": 0,
             "maxImages": 0,
-            "maxCrawledPlacesPerSearch": max_results
+
+            # 🔒 COST CONTROL
+            "maxConcurrency": 1,
+            "maxCrawledPlacesPerSearch": min(max_results, 5)
         }
 
         # -------------------------------------------------
-        # OPTIONAL: countryCode ONLY if user provided country
+        # OPTIONAL: COUNTRY CODE (PREVENT GLOBAL CRAWL)
         # -------------------------------------------------
         country_map = {
             "india": "in",
@@ -109,20 +130,31 @@ async def main():
             "usa": "us",
             "united kingdom": "gb",
             "uk": "gb",
-            "canada": "ca"
+            "canada": "ca",
+            "singapore": "sg",
+            "uae": "ae"
         }
 
         if country:
             code = country_map.get(country.lower())
             if code:
                 run_input["countryCode"] = code
+            else:
+                Actor.log.warning("⚠️ Country not mapped — running without countryCode (higher cost)")
 
         # -------------------------------------------------
         # START CRAWLER
         # -------------------------------------------------
-        run = client.actor("compass/crawler-google-places").start(
-            run_input=run_input
-        )
+        try:
+            run = client.actor("compass/crawler-google-places").start(
+                run_input=run_input
+            )
+        except Exception as e:
+            Actor.log.error(f"❌ Failed to start crawler: {e}")
+            await Actor.push_data({
+                "error": "Crawler could not be started due to credit or configuration limits."
+            })
+            return
 
         run_id = run["id"]
         dataset_id = run["defaultDatasetId"]
@@ -131,17 +163,20 @@ async def main():
 
         collected = 0
 
+        # -------------------------------------------------
+        # POLL + EARLY ABORT (EXTRA SAFETY)
+        # -------------------------------------------------
         while True:
             items = list(client.dataset(dataset_id).iterate_items())
             collected = len(items)
 
             Actor.log.info(f"📊 Collected {collected} places so far")
 
-            if collected >= max_results:
+            if collected >= min(max_results, 5):
                 client.run(run_id).abort()
                 break
 
-            if time.time() - START_TIME > 90:
+            if time.time() - START_TIME > 60:
                 client.run(run_id).abort()
                 break
 
@@ -170,7 +205,7 @@ async def main():
                 })
 
         await Actor.push_data(final_results[:max_results])
-        Actor.log.info(f"🎉 Finished. {len(final_results)} leads saved.")
+        Actor.log.info(f"🎉 Finished safely. {len(final_results)} leads saved.")
 
 
 if __name__ == "__main__":

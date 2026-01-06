@@ -8,6 +8,7 @@
       "title": "Sector",
       "type": "string",
       "editor": "select",
+      "description": "Select the business sector to generate leads for.",
       "enum": [
         "Healthcare",
         "Real Estate",
@@ -38,38 +39,43 @@
 
     "country": {
       "title": "Country (Optional)",
-      "description": "Enter any country (e.g., India, Australia, USA). Leave empty for global search.",
       "type": "string",
-      "editor": "textfield"
+      "editor": "textfield",
+      "description": "Country where businesses should be searched (e.g., India, Australia, USA). Leave empty for global search."
     },
 
     "state": {
       "title": "State / Province (Optional)",
       "type": "string",
-      "editor": "textfield"
+      "editor": "textfield",
+      "description": "State or province to narrow down the business search."
     },
 
     "city": {
       "title": "City / Suburb (Optional)",
       "type": "string",
-      "editor": "textfield"
+      "editor": "textfield",
+      "description": "City or suburb where businesses are located."
     },
 
     "postcode": {
       "title": "Postcode / ZIP Code (Optional)",
       "type": "string",
-      "editor": "textfield"
+      "editor": "textfield",
+      "description": "Postal or ZIP code to refine the search area."
     },
 
     "keyword": {
       "title": "Keyword (Optional)",
       "type": "string",
-      "editor": "textfield"
+      "editor": "textfield",
+      "description": "Optional keyword to refine the business search (e.g., clinic, software, agency)."
     },
 
     "maxResults": {
       "title": "Maximum Results",
       "type": "integer",
+      "description": "Maximum number of business leads to return.",
       "default": 10,
       "minimum": 1,
       "maximum": 100

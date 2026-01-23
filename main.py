@@ -117,7 +117,7 @@ async def main():
 
             # 🔒 COST CONTROL
             "maxConcurrency": 1,
-            "maxCrawledPlacesPerSearch": min(max_results, 5)
+            "maxCrawledPlacesPerSearch": min(max_results, 100)
         }
 
         # -------------------------------------------------
